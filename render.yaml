@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: clipper-api
+    name: Clipper-ai
     env: node
     plan: free
     buildCommand: npm install
