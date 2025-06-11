@@ -1,15 +1,3 @@
-const express = require("express");
-const axios = require("axios");
-const fs = require("fs");
-const ffmpeg = require("fluent-ffmpeg");
-const ffmpegPath = require("@ffmpeg-installer/ffmpeg").path;
-const { v4: uuidv4 } = require("uuid");
-
-ffmpeg.setFfmpegPath(ffmpegPath);
-
-const app = express();
-app.use(express.json());
-
 app.post("/clip-video", async (req, res) => {
   const { videoUrl, start, end } = req.body;
 
@@ -17,40 +5,54 @@ app.post("/clip-video", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields." });
   }
 
-  const inputFile = `input-${uuidv4()}.mp4`;
-  const outputFile = `output-${uuidv4()}.mp4`;
+  const jobId = uuidv4();
+  jobs[jobId] = { status: "processing", audio_url: null };
 
-  try {
-    const response = await axios({ url: videoUrl, method: "GET", responseType: "stream" });
-    const writer = fs.createWriteStream(inputFile);
-    response.data.pipe(writer);
+  // Async: kerjakan di belakang
+  (async () => {
+    const inputFile = `input-${jobId}.mp4`;
+    const outputFile = `output-${jobId}.mp4`;
 
-    await new Promise((resolve, reject) => {
-      writer.on("finish", resolve);
-      writer.on("error", reject);
-    });
+    try {
+      const response = await axios({ url: videoUrl, method: "GET", responseType: "stream" });
+      const writer = fs.createWriteStream(inputFile);
+      response.data.pipe(writer);
 
-    await new Promise((resolve, reject) => {
-      ffmpeg(inputFile)
-        .setStartTime(start)
-        .setDuration(end - start)
-        .output(outputFile)
-        .on("end", resolve)
-        .on("error", reject)
-        .run();
-    });
+      await new Promise((resolve, reject) => {
+        writer.on("finish", resolve);
+        writer.on("error", reject);
+      });
 
-    res.download(outputFile, () => {
+      await new Promise((resolve, reject) => {
+        ffmpeg(inputFile)
+          .setStartTime(start)
+          .setDuration(end - start)
+          .output(outputFile)
+          .on("end", resolve)
+          .on("error", reject)
+          .run();
+      });
+
+      jobs[jobId] = {
+        status: "done",
+        video_url: `https://your-domain.com/results/${outputFile}` // ganti sesuai real host kamu
+      };
+
       fs.unlinkSync(inputFile);
-      fs.unlinkSync(outputFile);
-    });
-  } catch (err) {
-    console.error("🔥 ERROR SAAT PROSES CLIP:", err.message);
-console.error(err.stack);
-res.status(500).json({ error: err.message });
-  }
+      // Jangan hapus outputFile, biar bisa diakses
+    } catch (err) {
+      console.error("🔥 ERROR:", err.message);
+      jobs[jobId] = { status: "error", error: err.message };
+    }
+  })();
+
+  res.json({ status: "received", job_id: jobId });
 });
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ API aktif di port ${PORT}`);
+
+app.get("/clip-video/result", (req, res) => {
+  const { job_id } = req.query;
+  if (!job_id || !jobs[job_id]) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+  res.json(jobs[job_id]);
 });
